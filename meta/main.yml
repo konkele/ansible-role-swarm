@@ -1,0 +1,17 @@
+galaxy_info:
+  role_name: swarm
+  author: Eric Konkel
+  description: >
+    Install and configure a highly available Docker Swarm cluster
+    with optional Keepalived VIPs and DNS adjustments.
+  license: MIT
+  min_ansible_version: "2.14"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "22.04"
+        - "24.04"
+
+dependencies:
+  - role: docker

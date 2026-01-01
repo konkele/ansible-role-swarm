@@ -1,0 +1,39 @@
+- name: Install Keepalived
+  ansible.builtin.apt:
+    name: keepalived
+    state: present
+    update_cache: true
+
+- name: Ensure /etc/keepalived directory exists
+  ansible.builtin.file:
+    path: /etc/keepalived
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Add keepalived_script user
+  ansible.builtin.user:
+    name: "{{ keepalived_script_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    groups: docker
+    append: true
+
+- name: Configure Keepalived (managers only)
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: is_swarm_manager
+  notify: restart keepalived
+
+- name: Enable and start Keepalived
+  ansible.builtin.service:
+    name: keepalived
+    state: started
+    enabled: true
+  when: is_swarm_manager
+  

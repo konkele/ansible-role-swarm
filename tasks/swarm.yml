@@ -1,0 +1,274 @@
+#------------------------------------------------------------------------------
+# Inventory-derived topology (cluster-aware)
+#------------------------------------------------------------------------------
+
+- name: Assert swarm cluster inventory groups exist
+  ansible.builtin.assert:
+    that:
+      - groups[swarm_cluster_name ~ '_managers'] is defined
+      - groups[swarm_cluster_name ~ '_managers'] | length > 0
+    fail_msg: >-
+      Required inventory group '{{ swarm_cluster_name }}_managers' is missing or empty
+
+- name: Detect swarm role from inventory
+  ansible.builtin.set_fact:
+    is_swarm_manager: "{{ inventory_hostname in groups[swarm_cluster_name ~ '_managers'] }}"
+    is_swarm_worker: "{{ inventory_hostname in (groups[swarm_cluster_name ~ '_workers'] | default([])) }}"
+
+- name: Determine first swarm manager (deterministic leader)
+  ansible.builtin.set_fact:
+    first_swarm_manager: "{{ groups[swarm_cluster_name ~ '_managers'] | sort | first }}"
+
+- name: Set leader flags
+  ansible.builtin.set_fact:
+    is_first_swarm_manager: "{{ inventory_hostname == first_swarm_manager }}"
+
+#------------------------------------------------------------------------------
+# Local swarm state detection
+#------------------------------------------------------------------------------
+
+- name: Get local swarm state
+  ansible.builtin.command: docker info --format '{{ "{{ .Swarm.LocalNodeState }}" }}'
+  register: local_swarm_state
+  changed_when: false
+  failed_when: false
+
+- name: Set local swarm facts
+  ansible.builtin.set_fact:
+    is_local_swarm_active: "{{ local_swarm_state.stdout == 'active' }}"
+
+#------------------------------------------------------------------------------
+# Forced leave / rejoin (optional)
+#------------------------------------------------------------------------------
+
+- name: Leave swarm (forced reset)
+  community.docker.docker_swarm:
+    state: absent
+    force: true
+  ignore_errors: true
+  when:
+    - swarm_force_rejoin | default(false) | bool
+    - is_local_swarm_active
+
+- name: Pause after forced leave
+  ansible.builtin.pause:
+    seconds: 3
+  when: swarm_force_rejoin | default(false) | bool
+
+- name: Refresh local swarm state
+  ansible.builtin.command: docker info --format '{{ "{{ .Swarm.LocalNodeState }}" }}'
+  register: local_swarm_state
+  changed_when: false
+  failed_when: false
+  when: swarm_force_rejoin | default(false) | bool
+
+- name: Update local swarm facts
+  ansible.builtin.set_fact:
+    is_local_swarm_active: "{{ local_swarm_state.stdout == 'active' }}"
+  when: swarm_force_rejoin | default(false) | bool
+
+#------------------------------------------------------------------------------
+# Initialize swarm (leader only)
+#------------------------------------------------------------------------------
+
+- name: Initialize Docker Swarm
+  community.docker.docker_swarm:
+    state: present
+    advertise_addr: "{{ ansible_default_ipv4.address }}"
+  when:
+    - is_first_swarm_manager
+    - not is_local_swarm_active
+
+#------------------------------------------------------------------------------
+# Gather cluster-wide swarm info
+#------------------------------------------------------------------------------
+
+- name: Gather swarm info from leader
+  community.docker.docker_swarm_info:
+  register: swarm_info
+  delegate_to: "{{ first_swarm_manager }}"
+  run_once: true
+
+- name: Set leader IP
+  ansible.builtin.set_fact:
+    first_swarm_manager_ip: "{{ hostvars[first_swarm_manager].ansible_default_ipv4.address }}"
+  run_once: true
+
+#------------------------------------------------------------------------------
+# Join nodes (idempotent)
+#------------------------------------------------------------------------------
+
+- name: Join Docker Swarm as manager
+  community.docker.docker_swarm:
+    state: join
+    join_token: "{{ hostvars[first_swarm_manager].swarm_info.swarm_facts.JoinTokens.Manager }}"
+    remote_addrs:
+      - "{{ first_swarm_manager_ip }}"
+  when:
+    - is_swarm_manager
+    - not is_first_swarm_manager
+    - not is_local_swarm_active
+
+- name: Join Docker Swarm as worker
+  community.docker.docker_swarm:
+    state: join
+    join_token: "{{ hostvars[first_swarm_manager].swarm_info.swarm_facts.JoinTokens.Worker }}"
+    remote_addrs:
+      - "{{ first_swarm_manager_ip }}"
+  when:
+    - is_swarm_worker
+    - not is_local_swarm_active
+
+#------------------------------------------------------------------------------
+# Automatic node pruning with quorum enforcement (leader only)
+#------------------------------------------------------------------------------
+
+- name: Gather swarm node list
+  community.docker.docker_node_info:
+  register: swarm_nodes
+  when:
+    - is_first_swarm_manager
+    - swarm_auto_prune | default(true) | bool
+
+- name: Build inventory hostname list
+  ansible.builtin.set_fact:
+    swarm_inventory_hosts: >-
+      {{
+        groups[swarm_cluster_name ~ '_managers']
+        + (groups[swarm_cluster_name ~ '_workers'] | default([]))
+      }}
+  when: is_first_swarm_manager
+
+#------------------------------------------------------------------------------
+# Quorum math
+#------------------------------------------------------------------------------
+
+- name: Identify active managers
+  ansible.builtin.set_fact:
+    swarm_active_managers: >-
+      {{
+        swarm_nodes.nodes
+        | selectattr('Spec.Role', 'equalto', 'manager')
+        | selectattr('Status.State', 'equalto', 'ready')
+        | list
+      }}
+  when:
+    - is_first_swarm_manager
+    - swarm_nodes.nodes is defined
+
+- name: Calculate quorum requirements
+  ansible.builtin.set_fact:
+    swarm_manager_count: "{{ swarm_active_managers | length }}"
+    swarm_min_quorum: "{{ (swarm_active_managers | length // 2) + 1 }}"
+  when: is_first_swarm_manager
+
+#------------------------------------------------------------------------------
+# Stale node detection
+#------------------------------------------------------------------------------
+
+- name: Identify stale nodes by role
+  ansible.builtin.set_fact:
+    stale_manager_nodes: >-
+      {{
+        swarm_nodes.nodes
+        | selectattr('Spec.Role', 'equalto', 'manager')
+        | selectattr('Status.State', 'in', swarm_prune_states)
+        | rejectattr('Description.Hostname', 'in', swarm_inventory_hosts)
+        | list
+      }}
+    stale_worker_nodes: >-
+      {{
+        swarm_nodes.nodes
+        | selectattr('Spec.Role', 'equalto', 'worker')
+        | selectattr('Status.State', 'in', swarm_prune_states)
+        | rejectattr('Description.Hostname', 'in', swarm_inventory_hosts)
+        | list
+      }}
+  when:
+    - is_first_swarm_manager
+    - swarm_nodes.nodes is defined
+
+#------------------------------------------------------------------------------
+# Quorum enforcement safety check
+#------------------------------------------------------------------------------
+
+- name: Calculate maximum safe manager removals
+  ansible.builtin.set_fact:
+    swarm_max_manager_removals: "{{ swarm_manager_count - swarm_min_quorum }}"
+  when: is_first_swarm_manager
+
+- name: Abort if pruning would violate quorum
+  ansible.builtin.assert:
+    that:
+      - swarm_max_manager_removals >= 0
+    fail_msg: >-
+      Refusing to prune swarm managers.
+      Active managers: {{ swarm_manager_count }},
+      Minimum quorum required: {{ swarm_min_quorum }}.
+      Pruning would violate quorum.
+  when: is_first_swarm_manager
+
+#------------------------------------------------------------------------------
+# Determine safe stale IDs
+#------------------------------------------------------------------------------
+
+- name: Determine safe stale manager IDs
+  ansible.builtin.set_fact:
+    safe_stale_manager_ids: >-
+      {%- set safe_count = swarm_max_manager_removals | int -%}
+      {{ (stale_manager_nodes | map(attribute='ID') | list)[: safe_count] }}
+  when:
+    - is_first_swarm_manager
+    - stale_manager_nodes is defined
+
+- name: No safe manager removals
+  ansible.builtin.set_fact:
+    safe_stale_manager_ids: []
+  when:
+    - is_first_swarm_manager
+    - swarm_max_manager_removals | int <= 0
+
+- name: Extract stale worker IDs
+  ansible.builtin.set_fact:
+    stale_worker_ids: "{{ stale_worker_nodes | map(attribute='ID') | list }}"
+  when: is_first_swarm_manager
+
+#------------------------------------------------------------------------------
+# Debug pruning plan
+#------------------------------------------------------------------------------
+
+- name: Debug pruning plan
+  ansible.builtin.debug:
+    msg:
+      managers_active: "{{ swarm_manager_count }}"
+      quorum_required: "{{ swarm_min_quorum }}"
+      stale_managers: "{{ stale_manager_nodes | map(attribute='Description.Hostname') | list }}"
+      managers_pruned: "{{ safe_stale_manager_ids }}"
+      workers_pruned: "{{ stale_worker_ids }}"
+  when: is_first_swarm_manager
+
+#------------------------------------------------------------------------------
+# Execute pruning (safe)
+#------------------------------------------------------------------------------
+
+- name: Remove safe stale managers
+  community.docker.docker_node:
+    state: absent
+    node_id: "{{ item }}"
+    force: true
+  loop: "{{ safe_stale_manager_ids }}"
+  when:
+    - is_first_swarm_manager
+    - swarm_auto_prune | default(true) | bool
+    - safe_stale_manager_ids | length > 0
+
+- name: Remove stale workers
+  community.docker.docker_node:
+    state: absent
+    node_id: "{{ item }}"
+    force: true
+  loop: "{{ stale_worker_ids }}"
+  when:
+    - is_first_swarm_manager
+    - swarm_auto_prune | default(true) | bool
+    - stale_worker_ids | length > 0

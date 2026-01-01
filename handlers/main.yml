@@ -1,0 +1,14 @@
+- name: restart keepalived
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted
+
+- name: restart systemd-resolved
+  ansible.builtin.service:
+    name: systemd-resolved
+    state: restarted
+
+- name: restart docker
+  ansible.builtin.service:
+    name: docker
+    state: restarted

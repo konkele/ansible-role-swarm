@@ -1,0 +1,43 @@
+# ----------------------------
+# Swarm Node Managment
+# ----------------------------
+swarm_cluster_name: default
+
+swarm_quorum_enforce: true
+swarm_force_rejoin: false
+swarm_auto_prune: true
+swarm_prune_states:
+  - down
+  - unreachable
+  - unknown
+
+swarm_disable_dnsstublistener: true
+
+# ----------------------------
+# Keepalived general
+# ----------------------------
+keepalived_script_user: keepalived_script
+
+# Health check scripts
+keepalived_scripts:
+  - name: traefik_avail
+    script: "/usr/bin/pgrep traefik"
+    interval: 2
+    timeout: 2
+    fall: 2
+    rise: 2
+    weight: -20
+
+# VRRP instances and VIPs
+keepalived_instances:
+  - name: traefik_vip
+    interface: "{{ ansible_default_ipv4.interface }}"
+    vrid: 100
+    priority: 100
+    advert_int: 1
+    auth_pass: "SuperSecretPassword"
+    vips:
+      - address: 192.168.1.100
+        cidr: 24
+    track_scripts:
+      - traefik_avail

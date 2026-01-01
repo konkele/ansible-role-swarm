@@ -1,0 +1,9 @@
+- name: Setup Docker Swarm Cluster
+  include_tasks: swarm.yml
+
+- name: Setup Keepalived 
+  include_tasks: keepalived.yml
+
+- name: Disable DNSStubListener (optional)
+  include_tasks: dns.yml
+  when: swarm_disable_dnsstublistener | bool
