@@ -30,6 +30,14 @@
   when: is_swarm_manager
   notify: restart keepalived
 
+- name: Install keepalived Docker label check script
+  ansible.builtin.copy:
+    src: chk_docker_label.sh
+    dest: /etc/keepalived/chk_docker_label.sh
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Enable and start Keepalived
   ansible.builtin.service:
     name: keepalived

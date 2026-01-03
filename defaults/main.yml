@@ -17,6 +17,7 @@ swarm_disable_dnsstublistener: true
 # Keepalived general
 # ----------------------------
 keepalived_script_user: keepalived_script
+keepalived_script_user_group: docker
 
 # Health check scripts
 keepalived_scripts:
