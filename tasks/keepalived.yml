@@ -1,47 +1,89 @@
+# ------------------------------------------------------------------------------
+# Keepalived configuration
+#
+# Purpose:
+#   - Install and configure Keepalived
+#   - Render VRRP configuration on swarm managers
+#   - Enable service only when explicitly configured
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Configuration validation
+# ------------------------------------------------------------------------------
+
+- name: Validate Keepalived configuration
+  ansible.builtin.assert:
+    that:
+      - keepalived_instances | length > 0
+    fail_msg: >
+      Keepalived enabled but no VRRP instances defined.
+  when: _keepalived_enabled
+
+# ------------------------------------------------------------------------------
+# Base installation
+# ------------------------------------------------------------------------------
+
 - name: Install Keepalived
   ansible.builtin.apt:
     name: keepalived
     state: present
     update_cache: true
+  when: _keepalived_enabled
 
-- name: Ensure /etc/keepalived directory exists
+- name: Ensure Keepalived configuration directory exists
   ansible.builtin.file:
     path: /etc/keepalived
     state: directory
     owner: root
     group: root
     mode: '0755'
+  when: _keepalived_enabled
 
-- name: Add keepalived_script user
+- name: Ensure Keepalived script user exists
   ansible.builtin.user:
     name: "{{ keepalived_script_user }}"
     system: true
     shell: /usr/sbin/nologin
-    groups: docker
+    groups: "{{ keepalived_script_user_group }}"
     append: true
+  when: _keepalived_enabled
 
-- name: Configure Keepalived (managers only)
+# ------------------------------------------------------------------------------
+# Manager-only configuration
+# ------------------------------------------------------------------------------
+
+- name: Render Keepalived configuration
   ansible.builtin.template:
     src: keepalived.conf.j2
     dest: /etc/keepalived/keepalived.conf
     owner: root
     group: root
     mode: '0644'
-  when: is_swarm_manager
+  when:
+    - _keepalived_enabled
+    - is_swarm_manager
   notify: restart keepalived
 
-- name: Install keepalived Docker label check script
+- name: Install Keepalived health check script
   ansible.builtin.copy:
     src: chk_docker_label.sh
     dest: /etc/keepalived/chk_docker_label.sh
     owner: root
     group: root
     mode: '0755'
+  when:
+    - _keepalived_enabled
+    - keepalived_scripts | default([]) | length > 0
+
+# ------------------------------------------------------------------------------
+# Service management
+# ------------------------------------------------------------------------------
 
 - name: Enable and start Keepalived
   ansible.builtin.service:
     name: keepalived
     state: started
     enabled: true
-  when: is_swarm_manager
-  
+  when:
+    - _keepalived_enabled
+    - is_swarm_manager

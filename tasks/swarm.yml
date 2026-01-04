@@ -206,7 +206,10 @@
       Active managers: {{ swarm_manager_count }},
       Minimum quorum required: {{ swarm_min_quorum }}.
       Pruning would violate quorum.
-  when: is_first_swarm_manager
+    quiet: true
+  when:
+    - is_first_swarm_manager
+    - swarm_quorum_enforce | bool
 
 #------------------------------------------------------------------------------
 # Determine safe stale IDs

@@ -1,5 +1,5 @@
 # ----------------------------
-# Swarm Node Managment
+# Swarm Node Management
 # ----------------------------
 swarm_cluster_name: default
 
@@ -11,7 +11,7 @@ swarm_prune_states:
   - unreachable
   - unknown
 
-swarm_disable_dnsstublistener: true
+swarm_disable_dnsstublistener: false
 
 # ----------------------------
 # Keepalived general
@@ -19,26 +19,5 @@ swarm_disable_dnsstublistener: true
 keepalived_script_user: keepalived_script
 keepalived_script_user_group: docker
 
-# Health check scripts
-keepalived_scripts:
-  - name: traefik_avail
-    script: "/usr/bin/pgrep traefik"
-    interval: 2
-    timeout: 2
-    fall: 2
-    rise: 2
-    weight: -20
-
-# VRRP instances and VIPs
-keepalived_instances:
-  - name: traefik_vip
-    interface: "{{ ansible_default_ipv4.interface }}"
-    vrid: 100
-    priority: 100
-    advert_int: 1
-    auth_pass: "SuperSecretPassword"
-    vips:
-      - address: 192.168.1.100
-        cidr: 24
-    track_scripts:
-      - traefik_avail
+keepalived_instances: []
+keepalived_scripts: []

@@ -1,52 +1,67 @@
 # Ansible Role: Swarm
 
-The **`swarm` role** installs and configures a highly available Docker Swarm cluster with optional Keepalived VIPs and DNS adjustments. It is designed to be **cluster-aware and deterministic**, safe for repeated execution across large inventories.
+The **`swarm` role** installs and configures a highly available Docker Swarm cluster with optional Keepalived virtual IPs (VIPs) and host-level DNS adjustments. It is designed to be **cluster-aware, defensive, and deterministic**, and is safe for repeated execution across large inventories and first-time runs.
 
-This role is **idempotent** and enforces **quorum-aware pruning**, safe node joins, and optional forced rejoin for stale or reset nodes.
+The role is **idempotent by default** and includes internal guards to ensure that optional components (such as Keepalived) are only installed, configured, or stopped when explicitly enabled via variables.
 
 ---
 
 ## Features
 
-* **Swarm Cluster Management**
+### Swarm Cluster Management
 
-  * Detect managers and workers from inventory
-  * Deterministic leader selection
-  * Initialize Swarm on first manager only
-  * Idempotent joins for managers and workers
-  * Forced leave and rejoin per node via `swarm_force_rejoin`
+* Detects managers and workers from inventory
+* Deterministic leader selection based on inventory ordering
+* Initializes the Swarm on the first manager only
+* Idempotent joins for managers and workers
+* Optional forced leave and rejoin per node via `swarm_force_rejoin`
 
-* **Automatic Node Pruning**
+### Automatic Node Pruning
 
-  * Detect stale managers and workers
-  * Enforce quorum when pruning
-  * Optional auto-prune of nodes in `down`, `unreachable`, or `unknown` states
+* Detects stale managers and workers
+* Enforces quorum safety before pruning managers
+* Optional automatic pruning of nodes in `down`, `unreachable`, or `unknown` states
 
-* **Keepalived VIPs**
+### Keepalived VIP Management
 
-  * Configurable VRRP instances
-  * Health check scripts with failover weighting
-  * Automatic configuration for swarm managers
+* Optional, opt-in Keepalived configuration
+* Configurable VRRP instances and VIPs
+* Health check scripts with weighted failover
+* Automatically scoped to Swarm managers only
+* Safe first-run behavior:
 
-* **DNS Adjustments**
+  * Keepalived is **not installed** unless configured
+  * Keepalived is **stopped and disabled** only if already installed
 
-  * Optional disabling of `DNSStubListener`
-  * Correct `/etc/resolv.conf` symlink for container DNS
-  * Enables a DNS server container to run on the cluster without port 53 bind conflicts
+### DNS Adjustments
 
-* **Safe Defaults**
+* Optional disabling of `systemd-resolved` DNSStubListener
+* Correct `/etc/resolv.conf` symlink for container DNS
+* Allows DNS containers (e.g., AdGuard, CoreDNS) to bind to port 53
 
-  * Swarm quorum enforced by default
-  * Auto-pruning enabled by default
-  * DNS stub listener disabled by default
+### Defensive Defaults
+
+* Swarm quorum enforcement enabled by default
+* Automatic node pruning enabled by default
+* Keepalived disabled unless explicitly configured
+* All destructive actions guarded by inventory intent and runtime checks
 
 ---
 
 ## Requirements
 
+
 * **Ansible 2.14+**
 * **Ubuntu 22.04 or 24.04**
-* **Docker role dependency**: [ansible-role-docker](https://github.com/konkele/ansible-role-docker)
+* **Docker** – required for Swarm functionality.
+The role will **automatically install Docker** if it is not already present, so a separate Docker role is **not required**. This includes:
+  * `docker-ce` and `docker-ce-cli`
+  * `containerd.io`
+  * `docker-compose-plugin`
+  * Necessary system packages (`ca-certificates`, `curl`, `gnupg`, `lsb-release`)
+
+
+> **Note:** If Docker is already installed, the role will detect it and skip installation.
 
 ---
 
@@ -54,26 +69,27 @@ This role is **idempotent** and enforces **quorum-aware pruning**, safe node joi
 
 All defaults are defined in `defaults/main.yml`.
 
-| Variable                        | Default                        | Description                                    |
-| ------------------------------- | ------------------------------ | ---------------------------------------------- |
-| `swarm_cluster_name`            | `default`                      | Inventory-based cluster prefix                 |
-| `swarm_quorum_enforce`          | `true`                         | Enforce quorum for manager pruning             |
-| `swarm_force_rejoin`            | `false`                        | Force local node to leave and rejoin Swarm     |
-| `swarm_auto_prune`              | `true`                         | Automatically remove stale nodes               |
-| `swarm_prune_states`            | `[down, unreachable, unknown]` | Node states considered stale                   |
-| `swarm_disable_dnsstublistener` | `true`                         | Disable systemd DNSStubListener for containers |
-| `keepalived_script_user`        | `keepalived_script`            | User for keepalived health check scripts       |
-| `keepalived_scripts`            | Configurable list              | Health check scripts for VIP tracking          |
-| `keepalived_instances`          | Configurable list              | VRRP instances with VIPs and tracking scripts  |
+### Swarm Variables
 
-### Example host variable override for forced rejoin
+| Variable                        | Default                        | Description                                   |
+| ------------------------------- | ------------------------------ | --------------------------------------------- |
+| `swarm_cluster_name`            | `default`                      | Inventory-based cluster name prefix           |
+| `swarm_quorum_enforce`          | `true`                         | Prevent manager pruning if quorum is violated |
+| `swarm_force_rejoin`            | `false`                        | Force local node to leave and rejoin Swarm    |
+| `swarm_auto_prune`              | `true`                         | Automatically remove stale nodes              |
+| `swarm_prune_states`            | `[down, unreachable, unknown]` | Node states considered stale                  |
+| `swarm_disable_dnsstublistener` | `false`                        | Disable systemd DNSStubListener               |
 
-```yaml
-# host_vars/swarm2-dev.yml
-swarm_force_rejoin: true
-```
+### Keepalived Variables
 
-> **Note:** Applying `swarm_force_rejoin: true` to all hosts will cause every node to leave and rejoin the Swarm. This can temporarily reduce availability and is **not recommended** for all nodes simultaneously.
+| Variable                       | Default             | Description                                  |
+| ------------------------------ | ------------------- | -------------------------------------------- |
+| `keepalived_script_user`       | `keepalived_script` | User for Keepalived health check scripts     |
+| `keepalived_script_user_group` | `docker`            | Group for Keepalived health check scripts    |
+| `keepalived_instances`         | `[]`                | VRRP instances and VIP definitions           |
+| `keepalived_scripts`           | `[]`                | Health check scripts referenced by instances |
+
+> **Note:** Keepalived is considered *enabled* only when `keepalived_instances` is non-empty.
 
 ---
 
@@ -81,18 +97,18 @@ swarm_force_rejoin: true
 
 The role expects the following inventory groups:
 
-* `<swarm_cluster_name>_managers`
+* `<swarm_cluster_name>_managers` (required)
 * `<swarm_cluster_name>_workers` (optional)
 
 ### Example
 
 ```ini
 [default_managers]
-swarm1-dev.lab.konkel.us
-swarm2-dev.lab.konkel.us
+swarm1.example.com
+swarm2.example.com
 
 [default_workers]
-swarm3-dev.lab.konkel.us
+swarm3.example.com
 ```
 
 ---
@@ -100,7 +116,7 @@ swarm3-dev.lab.konkel.us
 ## Example Playbook
 
 ```yaml
-- name: Setup Docker Swarm Cluster with Keepalived
+- name: Configure Docker Swarm cluster
   hosts: all
   become: true
   roles:
@@ -110,34 +126,54 @@ swarm3-dev.lab.konkel.us
 
 ---
 
-## Design Principles
+## Example Keepalived Configuration
 
-* Inventory expresses **intent**, not final state
-* Swarm leader selection is **deterministic** and cluster-aware
-* Node pruning respects **quorum** to avoid accidental outages
-* Forced leave/rejoin is **optional and host-scoped**
-* Keepalived configuration is **idempotent and manager-scoped**
-* DNS adjustments are optional, container-safe, and reversible
+```yaml
+# Health check scripts
+keepalived_scripts:
+  - name: generic_service_check
+    script: "/etc/keepalived/chk_docker_label.sh keepalived.vip=service"
+    interval: 2        # seconds between checks
+    timeout: 2         # check timeout in seconds
+    fall: 2            # consecutive failures before script is considered failed
+    rise: 3            # consecutive successes before script is considered healthy
+    weight: -20        # priority adjustment on failure
+
+# VRRP instance and virtual IP
+keepalived_instances:
+  - name: generic_vip
+    interface: "{{ ansible_default_ipv4.interface }}"   # network interface to bind VIP
+    vrid: 100                # unique VRRP ID in the cluster
+    priority: 100            # starting priority for this node
+    advert_int: 1            # advertisement interval in seconds
+    auth_pass: "securepass" # password for VRRP authentication
+    vips:
+      - address: "192.168.1.100"  # virtual IP address
+        cidr: 24                   # subnet mask
+    track_scripts:
+      - generic_service_check
+```
 
 ---
 
-## Tags
+## Operational Notes
 
-| Tag          | Description                               |
-| ------------ | ----------------------------------------- |
-| `swarm`      | Core swarm management (init, join, prune) |
-| `keepalived` | VRRP VIPs and health checks               |
-| `dns`        | DNSStubListener adjustments               |
+* Inventory expresses **desired cluster membership**, not transient runtime state
+* Leader selection is deterministic and repeatable
+* All pruning operations are quorum-safe by default
+* Forced leave/rejoin is **host-scoped** and should be used sparingly
+* Keepalived is fully optional and self-guarding
+* DNS changes are reversible and opt-in
 
 ---
 
-## Outputs
+## Exposed Facts
 
-The role exposes the following facts:
+The role sets the following facts for downstream use:
 
-* `first_swarm_manager` – Inventory hostname of the deterministic leader
-* `is_first_swarm_manager` – Boolean flag for leader node
-* `safe_stale_manager_ids` – List of manager IDs safe to prune
-* `stale_worker_ids` – List of worker IDs safe to prune
+* `first_swarm_manager` – Inventory hostname of the elected leader
+* `is_first_swarm_manager` – Boolean leader flag
+* `safe_stale_manager_ids` – Manager node IDs safe to prune
+* `stale_worker_ids` – Worker node IDs safe to prune
 
-These facts can be used in downstream automation, monitoring, or debugging tasks.
+These facts may be consumed by monitoring, reporting, or higher-level orchestration roles.
