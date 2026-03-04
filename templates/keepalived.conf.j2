@@ -1,12 +1,12 @@
 global_defs {
     enable_script_security
     router_id {{ inventory_hostname }}
+    script_user {{ keepalived_script_user }} {{ keepalived_script_user_group }}
 }
 
 {% for script in keepalived_scripts %}
 vrrp_script {{ script.name }} {
     script "{{ script.script }}"
-    user {{ keepalived_script_user }}
     interval {{ script.interval }}
     timeout {{ script.timeout }}
     fall {{ script.fall }}

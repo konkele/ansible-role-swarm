@@ -194,19 +194,22 @@
 
 - name: Calculate maximum safe manager removals
   ansible.builtin.set_fact:
-    swarm_max_manager_removals: "{{ swarm_manager_count - swarm_min_quorum }}"
+    swarm_max_manager_removals: "{{ swarm_manager_count | int - swarm_min_quorum | int }}"
   when: is_first_swarm_manager
 
 - name: Abort if pruning would violate quorum
   ansible.builtin.assert:
     that:
-      - swarm_max_manager_removals >= 0
+      - swarm_max_manager_removals | int >= 0
     fail_msg: >-
       Refusing to prune swarm managers.
       Active managers: {{ swarm_manager_count }},
       Minimum quorum required: {{ swarm_min_quorum }}.
       Pruning would violate quorum.
-  when: is_first_swarm_manager
+    quiet: true
+  when:
+    - is_first_swarm_manager
+    - swarm_quorum_enforce | bool
 
 #------------------------------------------------------------------------------
 # Determine safe stale IDs

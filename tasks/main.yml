@@ -1,9 +1,40 @@
-- name: Setup Docker Swarm Cluster
+# ------------------------------------------------------------------------------
+# Role entrypoint
+#
+# Purpose:
+#   - Configure docker dependancies
+#   - Configure Docker Swarm
+#   - Conditionally manage Keepalived
+#   - Apply host-level DNS adjustments
+# ------------------------------------------------------------------------------
+
+- name: Install and configure docker if required
+  include_tasks: docker.yml
+
+- name: Configure Docker Swarm cluster
   include_tasks: swarm.yml
 
-- name: Setup Keepalived 
-  include_tasks: keepalived.yml
+- name: Gather system service facts
+  ansible.builtin.service_facts:
 
-- name: Disable DNSStubListener (optional)
+- name: Determine whether Keepalived is configured
+  ansible.builtin.set_fact:
+    _keepalived_enabled: "{{ keepalived_instances | default([]) | length > 0 }}"
+
+- name: Configure Keepalived
+  include_tasks: keepalived.yml
+  when: _keepalived_enabled
+
+- name: Disable Keepalived when no configuration is present
+  ansible.builtin.service:
+    name: keepalived
+    state: stopped
+    enabled: false
+  when:
+    - not _keepalived_enabled
+    - is_swarm_manager
+    - "'keepalived.service' in ansible_facts.services"
+
+- name: Disable DNSStubListener
   include_tasks: dns.yml
   when: swarm_disable_dnsstublistener | bool

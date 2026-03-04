@@ -1,3 +1,10 @@
+# ------------------------------------------------------------------------------
+# System DNS configuration
+#
+# Purpose:
+#   - Disable systemd-resolved DNS stub listener
+# ------------------------------------------------------------------------------
+
 - name: Disable DNSStubListener
   ini_file:
     path: /etc/systemd/resolved.conf
